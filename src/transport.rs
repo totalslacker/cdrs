@@ -28,11 +28,13 @@
 
 use std::io;
 use std::io::{Read, Write};
+use std::collections::HashMap;
 use std::net;
 use std::net::TcpStream;
 use std::time::Duration;
 #[cfg(feature = "ssl")]
 use openssl::ssl::{SslStream, SslConnector};
+
 
 ///General CDRS transport trait. Both [`TranportTcp`][transportTcp]
 ///and [`TransportTls`][transportTls] has their own implementations of this trait. Generaly
@@ -59,6 +61,7 @@ pub trait CDRSTransport: Sized + Read + Write + Send + Sync {
 /// Default Tcp transport.
 pub struct TransportTcp {
     tcp: TcpStream,
+    addr_map: HashMap<String, String>,
 }
 
 impl TransportTcp {
@@ -72,7 +75,22 @@ impl TransportTcp {
     /// let tcp_transport = TransportTcp::new(addr).unwrap();
     /// ```
     pub fn new(addr: &str) -> io::Result<TransportTcp> {
-        TcpStream::connect(addr).map(|socket| TransportTcp { tcp: socket })
+        let empty_map: HashMap<String, String> = HashMap::new();
+        TcpStream::connect(addr).map(|socket| TransportTcp { tcp: socket, addr_map: empty_map })
+    }
+
+    pub fn new_map(addr: &str, addr_map: HashMap<String, String>) -> io::Result<TransportTcp> {
+        let mapped_address = TransportTcp::map_address(&addr_map, &String::from(addr));
+        TcpStream::connect(mapped_address.as_str()).map(|socket| TransportTcp { tcp: socket, addr_map: addr_map })
+    }
+
+    pub fn map_address(addr_map: &HashMap<String, String>, addr: &String) -> String {
+        let mapped_address = match addr_map.get(addr) {
+            Some(address) => address,
+            None => addr
+        };
+
+        mapped_address.clone()
     }
 }
 
@@ -95,7 +113,9 @@ impl Write for TransportTcp {
 impl CDRSTransport for TransportTcp {
     fn try_clone(&self) -> io::Result<TransportTcp> {
         let addr = try!(self.tcp.peer_addr());
-        TcpStream::connect(addr).map(|socket| TransportTcp { tcp: socket })
+        let addr_string = format!("{}:{}", addr.ip(), addr.port());
+        let mapped_address = TransportTcp::map_address(&self.addr_map, &addr_string);
+        TcpStream::connect(mapped_address).map(|socket| TransportTcp { tcp: socket, addr_map: self.addr_map.clone() })
     }
 
     fn close(&mut self, close: net::Shutdown) -> io::Result<()> {
